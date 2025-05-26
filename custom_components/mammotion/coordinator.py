@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -314,6 +315,12 @@ class MammotionBaseUpdateCoordinator[_DataT](DataUpdateCoordinator[_DataT]):
 
     async def async_blade_height(self, height: int) -> int:
         """Set blade height."""
+        # Check if device is online before sending blade height command
+        device = self.manager.get_device_by_name(self.device_name)
+        if not device.mower_state.online:
+            LOGGER.warning("Cannot set blade height: Device %s is offline", self.device_name)
+            return height
+        
         await self.async_send_command("set_blade_height", height=height)
         return height
 
@@ -627,9 +634,14 @@ class MammotionMaintenanceUpdateCoordinator(MammotionBaseUpdateCoordinator[Maint
         if data := await super()._async_update_data():
             return data
 
+        # Check if device is online before sending maintenance command
+        device = self.manager.get_device_by_name(self.device_name)
+        if not device.mower_state.online:
+            LOGGER.warning("Cannot get maintenance data: Device %s is offline", self.device_name)
+            return device.mower_state.report_data.maintenance
+
         try:
             await self.async_send_command("get_maintenance")
-
         except DeviceOfflineException as ex:
             """Device is offline try bluetooth if we have it."""
             if ex.iot_id == self.device.iotId:
@@ -639,6 +651,13 @@ class MammotionMaintenanceUpdateCoordinator(MammotionBaseUpdateCoordinator[Maint
                 return data
         except GatewayTimeoutException:
             """Gateway is timing out again."""
+            LOGGER.warning("Gateway timeout when getting maintenance data for %s", self.device_name)
+        except json.JSONDecodeError as ex:
+            # Handle JSON decode errors specifically
+            LOGGER.error("JSON decode error when getting maintenance data: %s", ex)
+        except Exception as ex:
+            # Catch any other unexpected exceptions
+            LOGGER.exception("Unexpected error getting maintenance data: %s", ex)
 
         return self.manager.get_device_by_name(
             self.device.deviceName
